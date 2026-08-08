@@ -51,8 +51,23 @@ pytest -q
   - **Local folder** — drop files into `data/videos/` (or point the sidebar at any folder) and pick one from the list.
   Best results: elevated wide-angle view of the whole pitch.
 - **Roster CSV** (optional) — `jersey_number,name,age` to map numbers to kids' names.
-- **Pitch reference points** (recommended for MVP) — 4 clicked pixel→meter points (`examples/refs_example.json`); or drop a pitch-keypoint model at `data/models/pitch_keypoints.pt` for moving-camera homography.
+- **Pitch reference points** (optional, unlocks full metrics) — 4 clicked pixel→meter points (`examples/refs_example.json`); or drop a pitch-keypoint model at `data/models/pitch_keypoints.pt` for moving-camera homography. Without either, the pipeline runs in **camera-relative mode** (see below) instead of failing.
 - **Detector weights** — auto-selected by hardware: `yolov8x.pt` (accurate) on GPU, `yolov8n.pt` (fast) on CPU. Override with `SCOUT_DETECTOR_WEIGHTS` — ideally a football-specific checkpoint (player/GK/ball/referee classes) for best results.
+
+## Two measurement modes
+
+Not every clip is a fixed wide-angle full-pitch recording, so the pipeline adapts instead of refusing to run:
+
+| | **Pitch mode** | **Camera-relative mode** |
+|---|---|---|
+| Needs | reference points or keypoint model | nothing |
+| Footage | fixed wide-angle, whole pitch visible | phone video, panning, highlights |
+| Scale from | homography → true metres | player bbox height ≈ 1.45 m |
+| Ratings use | all KPIs | on-ball KPIs only |
+| Excluded | — | distance, speed, sprints, progressive carries, final-third touches, forward-pass %, shots on target, save % |
+| Positions | heatmap centroid on pitch | rough guess from frame position — **coach should correct** |
+
+In camera-relative mode unmeasurable KPIs are stored as NaN rather than as invented numbers; the rating engine drops them and renormalizes the remaining weights, so a score always reflects only what was actually observed. The dashboard shows a banner, and scouting notes are told not to comment on fitness or positioning.
 
 ## Configuration
 

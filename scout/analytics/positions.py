@@ -18,6 +18,38 @@ def _in_own_box(x: pd.Series, y: pd.Series, attack_dir: int) -> pd.Series:
     return x_ok & y_ok
 
 
+def infer_roles_relative(tracks: pd.DataFrame,
+                         detector_gk: set[int] | None = None) -> pd.DataFrame:
+    """Role inference without pitch coordinates (camera-relative footage).
+
+    Uses each player's average position along the camera's horizontal axis
+    relative to their own team: the team defends toward one side of the frame,
+    so the ordering still separates deep players from advanced ones. Confidence
+    is capped low — a panning camera makes this a hint, not a measurement, and
+    the coach is expected to correct it in the dashboard.
+    """
+    detector_gk = detector_gk or set()
+    rows = []
+    for _, tg in tracks[tracks.team.isin(["A", "B"])].groupby("team"):
+        per = tg.groupby("track_id")
+        mean_x = per["x_m"].mean()
+        if mean_x.empty:
+            continue
+        # orient so that "low" = the side this team's players sit behind on average
+        team_axis = mean_x.rank(pct=True)
+        spread = (per["x_m"].std().fillna(0) / (mean_x.abs().mean() or 1)).clip(0, 1)
+
+        for tid in per.groups:
+            if tid in detector_gk:
+                rows.append((int(tid), "GK", 0.5))
+                continue
+            a = float(team_axis[tid])
+            role = "DEF" if a <= 1 / 3 else ("MID" if a <= 2 / 3 else "ATT")
+            conf = float(max(0.15, 0.5 - 0.3 * float(spread.get(tid, 0))))
+            rows.append((int(tid), role, round(conf, 2)))
+    return pd.DataFrame(rows, columns=["track_id", "role", "confidence"])
+
+
 def infer_roles(tracks: pd.DataFrame, attack_dir: dict[str, int],
                 detector_gk: set[int] | None = None) -> pd.DataFrame:
     """tracks: frame, track_id, team, x_m, y_m (pitch coords).

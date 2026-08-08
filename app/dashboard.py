@@ -179,6 +179,16 @@ if not players:
         st.video(str(vid))
     st.stop()
 
+if (mdir / "projection.json").exists():
+    if json.loads((mdir / "projection.json").read_text()).get("mode") == "relative":
+        st.warning(
+            "**Camera-relative mode** — this footage has no usable pitch reference "
+            "(moving camera or partial pitch view), so ratings use event and technical "
+            "KPIs only: touches, passing, duels, possession won/lost, shots. Distance, "
+            "speed and pitch-position metrics are excluded, and positions are a rough "
+            "guess — correct them below. For full metrics, analyze fixed wide-angle "
+            "footage with pitch reference points.")
+
 identity = {}
 if (mdir / "identity.json").exists():
     identity = json.loads((mdir / "identity.json").read_text())
@@ -190,7 +200,9 @@ rows = []
 for p in players:
     r = ratings.get(p.id)
     rows.append({"Player": p.name, "Jersey": p.jersey or "?", "Team": p.team,
-                 "Position": ROLE_LABEL.get(p.role, p.role), "Minutes": round(p.minutes),
+                 "Position": ROLE_LABEL.get(p.role, p.role),
+                 "Pos. confidence": round(p.role_confidence or 0, 2),
+                 "Minutes": round(p.minutes),
                  "Rating": r.overall if r else None,
                  **({g: v for g, v in (r.sub_scores or {}).items()} if r else {})})
 df = pd.DataFrame(rows).sort_values("Rating", ascending=False, na_position="last")

@@ -117,31 +117,42 @@ def run(source: str, roster: str | None = None, ref_points: str | None = None,
     # ---- project: homography -> pitch coordinates ----
     @stage("project")
     def project():
+        """Map pixels to metres. Falls back to camera-relative scaling when no
+        homography source exists, so any footage still yields event-based ratings."""
         from scout.perception import pitch
+        tracks = pd.read_parquet(mdir / "tracks.parquet")
+        proj = None
         if ref_points:
             proj = pitch.from_reference_points(ref_points)
         else:
             kp_weights = mdir.parent.parent / "models" / "pitch_keypoints.pt"
             if kp_weights.exists():
-                proj = pitch.from_keypoint_model(video, str(kp_weights),
-                                                 every_n=s.homography_every_n_frames)
-            else:
-                raise RuntimeError(
-                    "No homography source: supply --ref-points refs.json (4 clicked points) "
-                    "or place a pitch keypoint model at data/models/pitch_keypoints.pt")
-        tracks = pd.read_parquet(mdir / "tracks.parquet")
+                try:
+                    proj = pitch.from_keypoint_model(video, str(kp_weights),
+                                                     every_n=s.homography_every_n_frames)
+                except RuntimeError as e:
+                    log.warning("Keypoint homography failed (%s) — using camera-relative mode", e)
+        if proj is None:
+            proj = pitch.from_pixel_scale(tracks, s.player_height_m)
+            log.warning(
+                "No homography source — camera-relative mode: ratings use event/technical "
+                "KPIs only; distance, speed and pitch-position metrics are unavailable. "
+                "Supply --ref-points refs.json (fixed wide-angle footage) for full metrics.")
+
         tracks["cx"] = (tracks.x1 + tracks.x2) / 2
         tracks["cy"] = tracks.y2  # feet position, not bbox center
         proj.project_df(tracks, "cx", "cy").to_parquet(mdir / "tracks_pitch.parquet", index=False)
         ball = pd.read_parquet(mdir / "ball.parquet")
         proj.project_df(ball, "x", "y").to_parquet(mdir / "ball_pitch.parquet", index=False)
+        (mdir / "projection.json").write_text(json.dumps({"mode": proj.mode}))
 
     # ---- analyze: events + roles ----
     @stage("analyze")
     def analyze():
         from scout.analytics import events as E
-        from scout.analytics.positions import infer_roles
+        from scout.analytics.positions import infer_roles, infer_roles_relative
         identity = json.loads((mdir / "identity.json").read_text())
+        mode = json.loads((mdir / "projection.json").read_text())["mode"]
         tracks = pd.read_parquet(mdir / "tracks_pitch.parquet").dropna(subset=["x_m", "y_m"])
         tracks["team"] = tracks.track_id.astype(str).map(identity["teams"]).fillna("?")
         gk_det = set(tracks[tracks.cls == "goalkeeper"].track_id.unique())
@@ -154,20 +165,27 @@ def run(source: str, roster: str | None = None, ref_points: str | None = None,
         poss = E.compute_possession(tracks, ball)
         spells = E.possession_spells(poss)
 
-        # provisional roles for GK identification, then attack direction, then final roles
-        prov_dir = {"A": +1, "B": -1}
-        prov_roles = infer_roles(tracks, prov_dir, gk_det)
-        gk_by_team = {}
-        for r in prov_roles[prov_roles.role == "GK"].itertuples():
-            team = identity["teams"].get(str(r.track_id), "?")
-            if team in ("A", "B"):
-                gk_by_team[team] = r.track_id
-        attack_dir = E.infer_attack_direction(tracks, gk_by_team) or prov_dir
-        roles = infer_roles(tracks, attack_dir, gk_det)
+        if mode == "relative":
+            # No pitch frame of reference: roles come from position within the video
+            # frame, and shots can't be validated against a goal location.
+            roles = infer_roles_relative(tracks, gk_det)
+            attack_dir = {}
+            shots = E.detect_shots(ball, poss, fps, attack_dir=None)
+        else:
+            # provisional roles for GK identification, then attack direction, then final roles
+            prov_dir = {"A": +1, "B": -1}
+            prov_roles = infer_roles(tracks, prov_dir, gk_det)
+            gk_by_team = {}
+            for r in prov_roles[prov_roles.role == "GK"].itertuples():
+                team = identity["teams"].get(str(r.track_id), "?")
+                if team in ("A", "B"):
+                    gk_by_team[team] = r.track_id
+            attack_dir = E.infer_attack_direction(tracks, gk_by_team) or prov_dir
+            roles = infer_roles(tracks, attack_dir, gk_det)
+            shots = E.detect_shots(ball, poss, fps, attack_dir)
         gk_tracks = set(roles[roles.role == "GK"].track_id)
 
         trans = E.detect_transitions(spells, fps)
-        shots = E.detect_shots(ball, poss, fps, attack_dir)
         saves = E.detect_saves(shots, spells, fps, gk_tracks)
         duels = E.detect_duels(spells, tracks, fps)
 
@@ -183,12 +201,13 @@ def run(source: str, roster: str | None = None, ref_points: str | None = None,
         from scout.analytics.rating import rate_players
         identity = json.loads((mdir / "identity.json").read_text())
         attack_dir = json.loads((mdir / "attack_dir.json").read_text())
+        mode = json.loads((mdir / "projection.json").read_text())["mode"]
         tracks = pd.read_parquet(mdir / "tracks_pitch.parquet").dropna(subset=["x_m", "y_m"])
         tracks["team"] = tracks.track_id.astype(str).map(identity["teams"]).fillna("?")
         events = pd.read_parquet(mdir / "events.parquet")
         roles = pd.read_parquet(mdir / "roles.parquet")
 
-        metrics = compute_metrics(events, tracks, fps, attack_dir, roles)
+        metrics = compute_metrics(events, tracks, fps, attack_dir, roles, mode=mode)
         metrics.to_parquet(mdir / "metrics.parquet", index=False)
         ratings = rate_players(metrics, load_weights())
 
@@ -228,13 +247,14 @@ def run(source: str, roster: str | None = None, ref_points: str | None = None,
         from scout.report.clips import cut_highlights
         from scout.report.llm import scouting_note
         events = pd.read_parquet(mdir / "events.parquet")
+        limited = json.loads((mdir / "projection.json").read_text())["mode"] == "relative"
         with get_session() as db:
             for rating in db.query(Rating).filter_by(match_id=match_id).all():
                 player = db.get(Player, rating.player_id)
                 rating.note = scouting_note(
                     {"role": rating.role, "overall": rating.overall,
                      "sub_scores": rating.sub_scores, "evidence": rating.evidence,
-                     "low_sample": player.minutes < 15},
+                     "low_sample": player.minutes < 15, "limited": limited},
                     jersey=player.jersey or "?")
                 cut_highlights(video, events, fps, mdir / "clips", player.track_id)
             db.commit()

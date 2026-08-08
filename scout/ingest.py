@@ -124,6 +124,11 @@ def _download(url: str, dest: Path, progress=None) -> Path:
         "noprogress": True,
         "js_runtimes": _js_runtimes(),
     }
+    s = get_settings()
+    if s.ytdlp_cookies:
+        opts["cookiefile"] = s.ytdlp_cookies
+    elif s.ytdlp_cookies_from_browser:
+        opts["cookiesfrombrowser"] = (s.ytdlp_cookies_from_browser,)
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             ydl.download([url])
@@ -134,6 +139,13 @@ def _download(url: str, dest: Path, progress=None) -> Path:
                 "YouTube download failed: no usable JavaScript runtime. "
                 "Install Deno (https://deno.com) or Node 22+ (https://nodejs.org), "
                 "then restart Streamlit.") from exc
+        if "not a bot" in msg or "Sign in to confirm" in msg:
+            raise RuntimeError(
+                "YouTube blocked this download as bot traffic — common on cloud/datacenter "
+                "IPs (Colab, VPS). Options: (1) download the video on your own machine and "
+                "use the local-folder source instead; (2) export cookies.txt from a logged-in "
+                "browser and set SCOUT_YTDLP_COOKIES=/path/cookies.txt; (3) locally, set "
+                "SCOUT_YTDLP_COOKIES_FROM_BROWSER=chrome.") from exc
         raise
     return raw
 

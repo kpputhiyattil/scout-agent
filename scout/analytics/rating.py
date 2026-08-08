@@ -22,8 +22,13 @@ def rate_players(metrics: pd.DataFrame, weights: dict) -> pd.DataFrame:
     """metrics: one row per track_id incl. 'role' column.
     weights: role -> kpi -> {weight, group} (from weights.yaml).
 
+    KPIs that are entirely unavailable (all-NaN — e.g. distance and speed on
+    camera-relative footage) are dropped and the remaining weights renormalize,
+    so a rating always reflects only what was actually measured. `measured_kpis`
+    records what fed each score.
+
     Returns: track_id, role, overall (0-100), sub_scores {group: 0-100},
-             evidence {kpi: raw value}, low_sample.
+             evidence {kpi: raw value}, low_sample, measured_kpis.
     """
     out = []
     outfield = metrics[metrics.role.isin(["DEF", "MID", "ATT"])]
@@ -35,16 +40,21 @@ def rate_players(metrics: pd.DataFrame, weights: dict) -> pd.DataFrame:
         peers = players if len(players) >= MIN_PEER_GROUP else (
             outfield if role != "GK" and len(outfield) >= MIN_PEER_GROUP else players)
 
-        kpis = [k for k in spec if k in metrics.columns]
+        kpis = [k for k in spec if k in metrics.columns and not metrics[k].isna().all()]
         pct = {k: _percentile_rank(peers[k]) for k in kpis}
 
         for _, p in players.iterrows():
             tid = p.track_id
             total_w, score = 0.0, 0.0
             groups: dict[str, list[tuple[float, float]]] = {}
+            used = []
             for k in kpis:
+                if pd.isna(p[k]):                    # missing for this player only
+                    continue
+                used.append(k)
                 w = spec[k]["weight"]
-                v = float(pct[k].get(p.name, 50.0))
+                raw = pct[k].get(p.name, 50.0)
+                v = float(raw) if pd.notna(raw) else 50.0
                 v = 100 - v if w < 0 else v          # negative weight => lower is better
                 aw = abs(w)
                 score += aw * v
@@ -56,7 +66,8 @@ def rate_players(metrics: pd.DataFrame, weights: dict) -> pd.DataFrame:
             out.append({
                 "track_id": int(tid), "role": role, "overall": overall,
                 "sub_scores": subs,
-                "evidence": {k: round(float(p[k]), 2) for k in kpis},
+                "evidence": {k: round(float(p[k]), 2) for k in used},
                 "low_sample": bool(p.get("low_sample", False)),
+                "measured_kpis": len(used),
             })
     return pd.DataFrame(out).sort_values("overall", ascending=False).reset_index(drop=True)

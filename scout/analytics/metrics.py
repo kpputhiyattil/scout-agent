@@ -8,7 +8,12 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from scout.config import MAX_PLAUSIBLE_SPEED_KMH, PITCH_LENGTH_M, SPRINT_SPEED_KMH
+from scout.config import (
+    MAX_PLAUSIBLE_SPEED_KMH,
+    PITCH_LENGTH_M,
+    PITCH_ONLY_KPIS,
+    SPRINT_SPEED_KMH,
+)
 
 
 def physical_metrics(tracks: pd.DataFrame, fps: float) -> pd.DataFrame:
@@ -36,16 +41,28 @@ def _p90(count: float, minutes: float) -> float:
 
 
 def compute_metrics(events: pd.DataFrame, tracks: pd.DataFrame, fps: float,
-                    attack_dir: dict[str, int], roles: pd.DataFrame) -> pd.DataFrame:
+                    attack_dir: dict[str, int], roles: pd.DataFrame,
+                    mode: str = "pitch") -> pd.DataFrame:
     """events: frame, type, actor(track_id), plus type-specific cols.
-    Returns one row per track_id with every KPI weights.yaml can reference."""
+    Returns one row per track_id with every KPI weights.yaml can reference.
+
+    mode='relative' (no homography): KPIs that depend on true pitch coordinates
+    are set to NaN rather than reported as bogus numbers — the rating engine
+    drops them and renormalizes the remaining weights.
+    """
     phys = physical_metrics(tracks, fps).set_index("track_id")
     team_of = tracks.groupby("track_id")["team"].agg(lambda x: x.mode().iat[0])
     pos_mean = tracks.groupby("track_id")[["x_m", "y_m"]].mean()
     role_of = roles.set_index("track_id")["role"]
 
     def ev(t):
+        if "type" not in events.columns:
+            return events.iloc[0:0]
         return events[events.type == t]
+
+    def col(df, name, default=np.nan):
+        """Event column that only exists once that event type occurred."""
+        return df[name] if name in df.columns else pd.Series(default, index=df.index)
 
     passes, losses = ev("pass"), ev("loss")
     inter, duels = ev("interception"), ev("duel")
@@ -57,8 +74,8 @@ def compute_metrics(events: pd.DataFrame, tracks: pd.DataFrame, fps: float,
         team = team_of.get(tid, "?")
         d = attack_dir.get(team, +1)
 
-        p_made = passes[passes.actor == tid]
-        p_lost = losses[losses.actor == tid]
+        p_made = passes[col(passes, "actor", -1) == tid]
+        p_lost = losses[col(losses, "actor", -1) == tid]
         n_pass_att = len(p_made) + len(p_lost)
 
         # forward pass: receiver is further along attack axis than passer at pass frame
@@ -71,9 +88,10 @@ def compute_metrics(events: pd.DataFrame, tracks: pd.DataFrame, fps: float,
             except KeyError:
                 pass
 
-        my_shots = shots[shots.actor == tid]
-        opp_shots_on_t = shots[(shots.on_target == 1) & (shots.actor.map(team_of) != team)]
-        my_saves = saves[saves.actor == tid]
+        my_shots = shots[col(shots, "actor", -1) == tid]
+        opp_shots_on_t = shots[(col(shots, "on_target") == 1)
+                               & (col(shots, "actor", -1).map(team_of) != team)]
+        my_saves = saves[col(saves, "actor", -1) == tid]
         duels_w = duels[duels.winner == tid] if "winner" in duels else duels.iloc[0:0]
         duels_l = duels[duels.loser == tid] if "loser" in duels else duels.iloc[0:0]
 
@@ -94,7 +112,7 @@ def compute_metrics(events: pd.DataFrame, tracks: pd.DataFrame, fps: float,
             "interceptions_p90": _p90(len(inter[inter.actor == tid]), m),
             "clearances_p90": _p90(len(ev("clearance")[ev("clearance").actor == tid]) if len(ev("clearance")) else 0, m),
             "shots_p90": _p90(len(my_shots), m),
-            "shots_on_target_p90": _p90(int(my_shots.on_target.sum()) if len(my_shots) else 0, m),
+            "shots_on_target_p90": _p90(float(my_shots.on_target.sum(skipna=True)) if len(my_shots) else 0, m),
             "goals_p90": _p90(len(ev("goal")[ev("goal").actor == tid]) if len(ev("goal")) else 0, m),
             "chances_created_p90": _p90(sum(1 for r in p_made.itertuples()
                                             if len(shots[(shots.actor == r.target)
@@ -113,7 +131,17 @@ def compute_metrics(events: pd.DataFrame, tracks: pd.DataFrame, fps: float,
             "top_speed_kmh": round(float(phys.loc[tid, "top_speed_kmh"]), 1),
             "sprints_p90": _p90(phys.loc[tid, "sprints"], m),
         })
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    if mode == "relative":
+        # camera motion makes these unmeasurable; NaN is honest, a number is not
+        for kpi in PITCH_ONLY_KPIS:
+            if kpi in df.columns:
+                df[kpi] = np.nan
+        if "shots_on_target_p90" in df.columns:
+            df["shots_on_target_p90"] = np.nan   # no goal line to test against
+        if "save_pct" in df.columns:
+            df["save_pct"] = np.nan
+    return df
 
 
 def _progressive_carries(tracks: pd.DataFrame, tid: int, d: int,

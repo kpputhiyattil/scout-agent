@@ -19,6 +19,13 @@ PENALTY_BOX_WIDTH_M = 40.3
 MAX_PLAUSIBLE_SPEED_KMH = 30.0
 SPRINT_SPEED_KMH = 18.0
 
+# KPIs that require true pitch coordinates. In camera-relative mode these are
+# suppressed (NaN) and the rating engine renormalizes the remaining weights.
+PITCH_ONLY_KPIS = (
+    "distance_km_p90", "top_speed_kmh", "sprints_p90",
+    "progressive_carries_p90", "final_third_touches_p90", "forward_pass_pct",
+)
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="SCOUT_", env_file=".env", extra="ignore")
@@ -35,6 +42,10 @@ class Settings(BaseSettings):
     target_fps: int = 25
     target_height: int = 720
 
+    # Camera-relative fallback (no homography): typical player height, used to
+    # convert pixels to approximate metres from bounding-box size.
+    player_height_m: float = 1.45
+
     # Sampling
     ocr_sample_every_n_frames: int = 12   # ~2x/sec at 25fps
     homography_every_n_frames: int = 30
@@ -46,6 +57,11 @@ class Settings(BaseSettings):
     shot_speed_ms: float = 8.0
     save_window_s: float = 1.5
     duel_radius_m: float = 2.0
+
+    # YouTube download auth (needed on cloud/datacenter IPs like Colab, which YouTube
+    # challenges with "Sign in to confirm you're not a bot")
+    ytdlp_cookies: str = ""               # path to a cookies.txt file
+    ytdlp_cookies_from_browser: str = ""  # e.g. "chrome", "firefox", "edge"
 
     # LLM
     anthropic_api_key: str = ""

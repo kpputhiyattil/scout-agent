@@ -17,8 +17,48 @@ import pandas as pd
 from scout.config import PITCH_LENGTH_M, PITCH_WIDTH_M
 
 
+class RelativeProjector:
+    """Camera-relative fallback for footage with no usable homography.
+
+    Scale comes from player bounding-box height: a youth player is roughly
+    `player_height_m` tall, so metres_per_pixel = player_height_m / median bbox
+    height in that frame. Distances between nearby objects are approximately
+    right, which is all the event rules (possession radius, duel radius, ball
+    speed) actually need. Absolute positions are NOT meaningful — they shift
+    whenever the camera pans or zooms — so pitch-position metrics are suppressed
+    downstream.
+    """
+
+    mode = "relative"
+
+    def __init__(self, scale: pd.Series):
+        # scale: index = frame, value = metres per pixel
+        self.scale = scale.replace([np.inf, -np.inf], np.nan).dropna()
+        self.median = float(self.scale.median()) if len(self.scale) else 0.02
+
+    def scale_at(self, frame: int) -> float:
+        v = self.scale.get(frame)
+        return float(v) if v and np.isfinite(v) else self.median
+
+    def project_df(self, df: pd.DataFrame, xcol: str, ycol: str) -> pd.DataFrame:
+        out = df.copy()
+        mpp = df["frame"].map(self.scale).fillna(self.median).to_numpy()
+        out["x_m"] = df[xcol].to_numpy() * mpp
+        out["y_m"] = df[ycol].to_numpy() * mpp
+        return out
+
+
+def from_pixel_scale(tracks: pd.DataFrame, player_height_m: float) -> RelativeProjector:
+    """Build a RelativeProjector from person bounding boxes (needs y1, y2 columns)."""
+    h_px = (tracks["y2"] - tracks["y1"]).where(lambda s: s > 1)
+    med = tracks.assign(_h=h_px).groupby("frame")["_h"].median()
+    return RelativeProjector(player_height_m / med)
+
+
 class Projector:
     """Piecewise-constant homographies over frame windows."""
+
+    mode = "pitch"
 
     def __init__(self, windows: list[tuple[int, np.ndarray]]):
         # windows: sorted [(start_frame, 3x3 H), ...]

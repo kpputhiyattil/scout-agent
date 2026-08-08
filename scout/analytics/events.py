@@ -105,13 +105,15 @@ def detect_transitions(spells: pd.DataFrame, fps: float, max_gap_s: float = 2.0)
 
 
 def detect_shots(ball: pd.DataFrame, possession: pd.DataFrame, fps: float,
-                 attack_dir: dict[str, int],
+                 attack_dir: dict[str, int] | None,
                  shot_speed_ms: float | None = None) -> pd.DataFrame:
     """Shot = ball leaves a player's control at high speed, moving toward the
     goal his team attacks, from inside the attacking 40% of the pitch.
 
     attack_dir: {'A': +1|-1, 'B': ...} — +1 means attacking toward x = L.
-    Returns events: frame, type='shot', actor, on_target(0/1).
+    Pass None for camera-relative footage: without a pitch frame of reference the
+    zone and goal-line checks are meaningless, so every high-speed release counts
+    as a strike attempt and on_target is left unknown (NaN).
     """
     s = get_settings()
     shot_speed_ms = shot_speed_ms or s.shot_speed_ms
@@ -136,7 +138,13 @@ def detect_shots(ball: pd.DataFrame, possession: pd.DataFrame, fps: float,
         if r.frame not in poss.index:
             continue
         owner, team = poss.loc[r.frame, "owner"], poss.loc[r.frame, "team"]
-        if owner == UNKNOWN or team not in attack_dir:
+        if owner == UNKNOWN:
+            continue
+        if attack_dir is None:  # camera-relative: no goal to aim at, on_target unknown
+            rows.append((int(r.frame), "shot", int(owner), np.nan))
+            cooldown = r.frame
+            continue
+        if team not in attack_dir:
             continue
         d = attack_dir[team]
         in_attacking_zone = (r.x_m > 0.6 * PITCH_LENGTH_M) if d > 0 else (r.x_m < 0.4 * PITCH_LENGTH_M)

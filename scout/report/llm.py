@@ -18,10 +18,14 @@ Player: jersey #{jersey}, role {role}, overall rating {overall}/100 (percentile-
 Sub-scores: {subs}
 Metrics: {evidence}
 Low sample size: {low_sample}
+Limited measurement (camera-relative footage — no distance, speed or pitch-position data): {limited}
 
 Write ~120 words: 2-3 strengths, 1-2 areas to develop, one concrete training suggestion.
 Use ONLY the numbers provided. If a metric is missing, do not mention it.
+Never comment on fitness, work rate, distance covered, speed or positioning unless
+those exact metrics appear above.
 If low sample size is true, note the rating is based on limited minutes.
+If limited measurement is true, note the rating covers on-ball actions only.
 Encouraging, constructive tone — this is a child's development report, not a transfer assessment."""
 
 
@@ -33,7 +37,10 @@ def template_note(rating: dict) -> str:
             f"Strongest area: {best} ({subs.get(best, '?')}). "
             f"Development focus: {worst} ({subs.get(worst, '?')}). ")
     if rating.get("low_sample"):
-        note += "Note: limited minutes played — treat this rating as indicative only."
+        note += "Note: limited minutes played — treat this rating as indicative only. "
+    if rating.get("limited"):
+        note += ("Footage allowed on-ball actions only — no running, speed or positioning "
+                 "data was measurable.")
     return note
 
 
@@ -47,7 +54,8 @@ def scouting_note(rating: dict, jersey: int | str = "?") -> str:
         prompt = PROMPT.format(jersey=jersey, role=rating["role"], overall=rating["overall"],
                                subs=json.dumps(rating.get("sub_scores", {})),
                                evidence=json.dumps(rating.get("evidence", {})),
-                               low_sample=rating.get("low_sample", False))
+                               low_sample=rating.get("low_sample", False),
+                               limited=rating.get("limited", False))
         log.info("LLM prompt for #%s: %s", jersey, prompt)
         msg = client.messages.create(model=s.llm_model, max_tokens=400,
                                      messages=[{"role": "user", "content": prompt}])
