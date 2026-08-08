@@ -2,7 +2,7 @@
 
 AI football scouting for youth players: give it any match video (YouTube URL or file), it detects and tracks every kid, identifies them by jersey number, infers their position, and rates each one 0–100 **against the expectations of their own position** — attacker, midfielder, defender, or goalkeeper — with evidence-backed sub-scores and an AI-written scouting note for the coach.
 
-Design: **CV turns pixels into facts, rules turn facts into scores, an LLM turns scores into words.** Full architecture and rationale in [SOLUTION_BLUEPRINT.md](SOLUTION_BLUEPRINT.md).
+Design: **CV turns pixels into facts, rules turn facts into scores, an LLM turns scores into words.**
 
 ## How it works
 
