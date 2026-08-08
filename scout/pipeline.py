@@ -65,8 +65,21 @@ def _stage_done(match_id: str, stage: str) -> bool:
 
 
 def run(source: str, roster: str | None = None, ref_points: str | None = None,
-        force: bool = False) -> str:
+        force: bool = False, force_from: str | None = None) -> str:
+    """Run the pipeline for `source`, skipping stages already completed.
+
+    force:      re-run every stage, including GPU detection.
+    force_from: re-run this stage and everything after it — use when only the
+                later analytics changed, so the expensive perceive stage is kept.
+    """
     s = get_settings()
+    if force_from and force_from not in STAGES:
+        raise ValueError(f"force_from must be one of {STAGES}")
+
+    def forced(name: str) -> bool:
+        if force:
+            return True
+        return bool(force_from) and STAGES.index(name) >= STAGES.index(force_from)
 
     # ---- ingest ----
     from scout.ingest import ingest, match_id_for
@@ -87,7 +100,7 @@ def run(source: str, roster: str | None = None, ref_points: str | None = None,
     def stage(name):
         def deco(fn):
             def wrapper():
-                if _stage_done(match_id, name) and not force:
+                if _stage_done(match_id, name) and not forced(name):
                     log.info("skip %s (done)", name)
                     return
                 _set_status(match_id, name, "running")
@@ -314,9 +327,12 @@ def main():
     g.add_argument("--file", help="Local video file")
     ap.add_argument("--roster", help="CSV with jersey_number,name[,age]")
     ap.add_argument("--ref-points", help="JSON with 4+ pixel->pitch reference points")
-    ap.add_argument("--force", action="store_true", help="Re-run completed stages")
+    ap.add_argument("--force", action="store_true", help="Re-run every stage")
+    ap.add_argument("--force-from", choices=STAGES, metavar="STAGE",
+                    help=f"Re-run from this stage onward, keeping earlier work. One of: {', '.join(STAGES)}")
     a = ap.parse_args()
-    run(a.url or a.file, roster=a.roster, ref_points=a.ref_points, force=a.force)
+    run(a.url or a.file, roster=a.roster, ref_points=a.ref_points,
+        force=a.force, force_from=a.force_from)
 
 
 if __name__ == "__main__":
