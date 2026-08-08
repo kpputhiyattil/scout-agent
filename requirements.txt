@@ -1,0 +1,35 @@
+# Full stack (perception + UI + LLM + dev). Mirrors pyproject.toml [all].
+# pip install -r requirements.txt
+# CPU-only? Install torch first per https://pytorch.org/get-started/locally/
+
+# Core
+numpy>=1.26
+pandas>=2.1
+pyyaml>=6.0
+pydantic>=2.6
+pydantic-settings>=2.2
+sqlalchemy>=2.0
+pyarrow>=15.0
+
+# Perception (GPU recommended)
+torch>=2.2
+ultralytics>=8.2
+supervision>=0.25
+opencv-python>=4.9
+easyocr>=1.7
+scikit-learn>=1.4
+yt-dlp>=2024.4.9
+ffmpeg-python>=0.2
+
+# Dashboard
+streamlit>=1.35
+plotly>=5.20
+mplsoccer>=1.4
+matplotlib>=3.8
+
+# LLM scouting notes (optional at runtime)
+anthropic>=0.34
+
+# Dev
+pytest>=8.0
+ruff>=0.4

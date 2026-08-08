@@ -1,0 +1,62 @@
+"""Rating engine: role-weighted percentile scoring -> 0-100 + sub-scores.
+
+Why percentiles: absolute benchmarks don't exist for kids. Each KPI is ranked
+within the squad's role peers (fallback: all outfield players when the peer
+group is too small), then combined with coach-editable weights from weights.yaml.
+Negative weights (e.g. possession_lost_p90) invert the percentile.
+"""
+from __future__ import annotations
+
+import pandas as pd
+
+MIN_PEER_GROUP = 6
+
+
+def _percentile_rank(series: pd.Series) -> pd.Series:
+    if series.nunique() <= 1:
+        return pd.Series(50.0, index=series.index)
+    return series.rank(pct=True) * 100
+
+
+def rate_players(metrics: pd.DataFrame, weights: dict) -> pd.DataFrame:
+    """metrics: one row per track_id incl. 'role' column.
+    weights: role -> kpi -> {weight, group} (from weights.yaml).
+
+    Returns: track_id, role, overall (0-100), sub_scores {group: 0-100},
+             evidence {kpi: raw value}, low_sample.
+    """
+    out = []
+    outfield = metrics[metrics.role.isin(["DEF", "MID", "ATT"])]
+
+    for role, spec in weights.items():
+        players = metrics[metrics.role == role]
+        if players.empty:
+            continue
+        peers = players if len(players) >= MIN_PEER_GROUP else (
+            outfield if role != "GK" and len(outfield) >= MIN_PEER_GROUP else players)
+
+        kpis = [k for k in spec if k in metrics.columns]
+        pct = {k: _percentile_rank(peers[k]) for k in kpis}
+
+        for _, p in players.iterrows():
+            tid = p.track_id
+            total_w, score = 0.0, 0.0
+            groups: dict[str, list[tuple[float, float]]] = {}
+            for k in kpis:
+                w = spec[k]["weight"]
+                v = float(pct[k].get(p.name, 50.0))
+                v = 100 - v if w < 0 else v          # negative weight => lower is better
+                aw = abs(w)
+                score += aw * v
+                total_w += aw
+                groups.setdefault(spec[k]["group"], []).append((aw, v))
+            overall = round(score / total_w, 1) if total_w else 50.0
+            subs = {g: round(sum(w * v for w, v in items) / sum(w for w, _ in items), 1)
+                    for g, items in groups.items()}
+            out.append({
+                "track_id": int(tid), "role": role, "overall": overall,
+                "sub_scores": subs,
+                "evidence": {k: round(float(p[k]), 2) for k in kpis},
+                "low_sample": bool(p.get("low_sample", False)),
+            })
+    return pd.DataFrame(out).sort_values("overall", ascending=False).reset_index(drop=True)

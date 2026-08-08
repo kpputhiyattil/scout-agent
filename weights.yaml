@@ -1,0 +1,46 @@
+# Rating weights per role. Coach-editable: change weights, re-run rating stage only.
+# Each KPI: weight (relative importance) and group (sub-score bucket).
+# KPIs are percentile-ranked within the squad before weighting, so units don't matter.
+
+ATT:
+  goals_p90:            {weight: 0.20, group: attacking}
+  shots_on_target_p90:  {weight: 0.12, group: attacking}
+  shots_p90:            {weight: 0.06, group: attacking}
+  dribble_success_pct:  {weight: 0.12, group: technical}
+  chances_created_p90:  {weight: 0.12, group: attacking}
+  final_third_touches_p90: {weight: 0.10, group: attacking}
+  pass_completion_pct:  {weight: 0.08, group: technical}
+  sprints_p90:          {weight: 0.08, group: physical}
+  top_speed_kmh:        {weight: 0.06, group: physical}
+  possession_won_p90:   {weight: 0.06, group: defending}
+
+MID:
+  pass_completion_pct:  {weight: 0.16, group: technical}
+  forward_pass_pct:     {weight: 0.12, group: technical}
+  passes_p90:           {weight: 0.10, group: technical}
+  possession_won_p90:   {weight: 0.14, group: defending}
+  distance_km_p90:      {weight: 0.12, group: physical}
+  progressive_carries_p90: {weight: 0.10, group: attacking}
+  chances_created_p90:  {weight: 0.10, group: attacking}
+  possession_lost_p90:  {weight: -0.08, group: technical}
+  duel_win_pct:         {weight: 0.08, group: defending}
+  sprints_p90:          {weight: 0.06, group: physical}
+
+DEF:
+  duel_win_pct:         {weight: 0.18, group: defending}
+  interceptions_p90:    {weight: 0.16, group: defending}
+  clearances_p90:       {weight: 0.12, group: defending}
+  possession_won_p90:   {weight: 0.14, group: defending}
+  pass_completion_pct:  {weight: 0.10, group: technical}
+  possession_lost_p90:  {weight: -0.10, group: technical}
+  top_speed_kmh:        {weight: 0.08, group: physical}
+  distance_km_p90:      {weight: 0.06, group: physical}
+  forward_pass_pct:     {weight: 0.06, group: technical}
+
+GK:
+  saves_p90:            {weight: 0.28, group: defending}
+  save_pct:             {weight: 0.24, group: defending}
+  goals_conceded_p90:   {weight: -0.16, group: defending}
+  pass_completion_pct:  {weight: 0.12, group: technical}
+  sweeper_actions_p90:  {weight: 0.10, group: defending}
+  possession_lost_p90:  {weight: -0.10, group: technical}

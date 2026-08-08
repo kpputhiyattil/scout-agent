@@ -1,0 +1,9 @@
+{
+  "_comment": "4+ reference points mapping video pixels to pitch meters (origin = left-bottom corner as seen from camera; pitch 100x64m). Click the points once in any image viewer on a paused frame, then fill px values. Best points: the 4 pitch corners, or penalty-box corners if corners aren't visible.",
+  "points": [
+    {"px": [112, 596], "pitch": [0, 0]},
+    {"px": [1163, 601], "pitch": [100, 0]},
+    {"px": [986, 82],  "pitch": [100, 64]},
+    {"px": [297, 80],  "pitch": [0, 64]}
+  ]
+}
