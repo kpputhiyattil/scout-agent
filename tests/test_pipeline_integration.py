@@ -18,10 +18,10 @@ import pytest
 from scout.ingest import ensure_ffmpeg
 
 N_PLAYERS = 12
-N_FRAMES = 250          # 10 s at 25 fps
+N_FRAMES = 100          # 4 s at 25 fps — enough to exercise every stage, fast to encode
 
 
-def _make_video(path: Path, seconds: int = 10) -> Path:
+def _make_video(path: Path, seconds: int = 4) -> Path:
     ensure_ffmpeg()
     subprocess.run(
         ["ffmpeg", "-y", "-f", "lavfi", "-i", f"testsrc=size=640x360:rate=25:duration={seconds}",
@@ -56,6 +56,8 @@ def pipeline_env(tmp_path, monkeypatch):
     """Isolated data dir + stubbed perception stage."""
     monkeypatch.setenv("SCOUT_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("SCOUT_DEVICE", "cpu")
+    # the synthetic clip is 10 s long; keep every track so stage wiring is what's tested
+    monkeypatch.setenv("SCOUT_MIN_TRACK_SECONDS", "1")
 
     import scout.config as config
     import scout.db as db
@@ -142,6 +144,40 @@ def test_every_player_gets_a_low_confidence_position(pipeline_env):
     assert roles and all(r in {"GK", "DEF", "MID", "ATT"} for r, _ in roles)
     assert all(c <= 0.5 for _, c in roles), \
         "camera-relative positions must be flagged low-confidence for coach review"
+
+
+def test_fragments_are_excluded_from_ratings(pipeline_env, monkeypatch):
+    """Short-lived tracks are fragments, not children — they must not be rated."""
+    import json
+
+    from scout.config import get_settings
+    from scout.db import Player, get_session
+    from scout.pipeline import run
+
+    monkeypatch.setenv("SCOUT_MIN_TRACK_SECONDS", "600")   # nothing can qualify
+    get_settings.cache_clear()
+
+    match_id = run(str(_make_video(pipeline_env / "match.mp4")))
+    quality = json.loads((get_settings().match_dir(match_id) / "quality.json").read_text())
+
+    assert quality["n_fragments_dropped"] > 0
+    # a floor still applies so the coach sees the longest identities, not an empty page
+    assert quality["n_rated"] == get_settings().min_rated_players
+    with get_session() as db:
+        assert db.query(Player).filter_by(match_id=match_id).count() == quality["n_rated"]
+
+
+def test_quality_report_written(pipeline_env):
+    import json
+
+    from scout.config import get_settings
+    from scout.pipeline import run
+
+    match_id = run(str(_make_video(pipeline_env / "match.mp4")))
+    q = json.loads((get_settings().match_dir(match_id) / "quality.json").read_text())
+    assert q["n_raw_tracks"] == N_PLAYERS
+    assert q["n_rated"] == N_PLAYERS
+    assert q["n_fragments_dropped"] == 0
 
 
 def test_rerun_is_idempotent(pipeline_env):

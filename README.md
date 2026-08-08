@@ -54,6 +54,18 @@ pytest -q
 - **Pitch reference points** (optional, unlocks full metrics) — 4 clicked pixel→meter points (`examples/refs_example.json`); or drop a pitch-keypoint model at `data/models/pitch_keypoints.pt` for moving-camera homography. Without either, the pipeline runs in **camera-relative mode** (see below) instead of failing.
 - **Detector weights** — auto-selected by hardware: `yolov8x.pt` (accurate) on GPU, `yolov8n.pt` (fast) on CPU. Override with `SCOUT_DETECTOR_WEIGHTS` — ideally a football-specific checkpoint (player/GK/ball/referee classes) for best results.
 
+## Footage quality drives everything
+
+Tracking quality, not model size, is what limits results. A tracker loses a player at every hard cut, fast pan or occlusion and issues a new id — an edited highlights reel produced **1239 track ids for ~12 children**, i.e. fragments of less than a second each, from which no honest rating can be computed.
+
+The pipeline defends against this in three ways:
+
+- **Fragment merging** — tracks reading the same jersey number for the same team are stitched into one player (`identity.json → merge`). Jersey OCR is therefore not a nice-to-have: it is the identity anchor.
+- **Fragment filtering** — identities observed for less than `SCOUT_MIN_TRACK_SECONDS` (default 20 s) are excluded from ratings rather than presented as children with four seconds of match time.
+- **Quality reporting** — `quality.json` records raw tracks, jerseys read, players rated and fragments dropped; the dashboard shows these and warns loudly when fragmentation is severe.
+
+Best footage: one continuous take, fixed elevated wide-angle camera, whole pitch in view, jersey numbers legible. Worst: edited highlights with cuts and zooms.
+
 ## Two measurement modes
 
 Not every clip is a fixed wide-angle full-pitch recording, so the pipeline adapts instead of refusing to run:

@@ -189,6 +189,25 @@ if (mdir / "projection.json").exists():
             "guess — correct them below. For full metrics, analyze fixed wide-angle "
             "footage with pitch reference points.")
 
+if (mdir / "quality.json").exists():
+    q = json.loads((mdir / "quality.json").read_text())
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Tracked identities", q["n_raw_tracks"])
+    c2.metric("Jersey numbers read", q["n_jerseys_read"])
+    c3.metric("Players rated", q["n_rated"])
+    c4.metric("Median minutes", round(q["median_minutes"], 1))
+    if q["n_raw_tracks"] > 4 * max(q["n_rated"], 1):
+        st.error(
+            f"**Heavy identity fragmentation** — {q['n_raw_tracks']} separate tracks were "
+            f"created for ~{q['n_rated']} players. Camera cuts, panning and occlusion make the "
+            "tracker lose people, so one child becomes many short tracks. Ratings here are "
+            "unreliable. Fixes, in order of impact: use continuous footage (no edited "
+            "highlights), a fixed wide-angle camera, and a roster CSV so jersey numbers can "
+            "stitch fragments back together.")
+    elif q["n_jerseys_read"] < q["n_rated"]:
+        st.info("Some players have no jersey number — OCR needs numbers to be visible and "
+                "reasonably large. Assign them manually in Coach corrections below.")
+
 identity = {}
 if (mdir / "identity.json").exists():
     identity = json.loads((mdir / "identity.json").read_text())

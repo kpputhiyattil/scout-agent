@@ -48,6 +48,16 @@ def _pct_reporter(match_id: str, stage: str):
     return cb
 
 
+def _apply_merge(tracks: pd.DataFrame, identity: dict) -> pd.DataFrame:
+    """Rewrite track ids to their canonical player id (jersey-based fragment merge)."""
+    merge = {int(k): int(v) for k, v in identity.get("merge", {}).items()}
+    if not merge:
+        return tracks
+    tracks = tracks.copy()
+    tracks["track_id"] = tracks.track_id.map(merge).fillna(tracks.track_id).astype(int)
+    return tracks
+
+
 def _stage_done(match_id: str, stage: str) -> bool:
     with get_session() as db:
         row = db.query(JobStatus).filter_by(match_id=match_id, stage=stage, status="done").first()
@@ -99,18 +109,27 @@ def run(source: str, roster: str | None = None, ref_points: str | None = None,
     # ---- identify: teams + jerseys ----
     @stage("identify")
     def identify():
-        from scout.perception.jersey import join_roster, read_jerseys
+        from scout.perception.jersey import join_roster, merge_map, read_jerseys
         from scout.perception.team import assign_teams
         tracks = pd.read_parquet(mdir / "tracks.parquet")
         teams, separation = assign_teams(video, tracks)
         jerseys = read_jerseys(video, tracks)
         names = join_roster(jerseys, roster)
+        # trackers fragment identities on moving/cut footage; the jersey number
+        # is the only stable anchor for stitching fragments back into one player
+        merge = merge_map(jerseys, teams)
+        n_tracks = tracks.track_id.nunique()
         (mdir / "identity.json").write_text(json.dumps({
             "teams": {str(k): v for k, v in teams.items()},
             "jerseys": {str(k): v for k, v in jerseys.items()},
             "names": {str(k): v for k, v in names.items()},
+            "merge": {str(k): int(v) for k, v in merge.items()},
             "team_separation": separation,
+            "n_raw_tracks": int(n_tracks),
+            "n_jerseys_read": len(jerseys),
         }))
+        log.info("identity: %d raw tracks, %d with jersey numbers, %d players after merge",
+                 n_tracks, len(jerseys), n_tracks - (len(merge) - len(set(merge.values()))))
         if separation < 0.3:
             log.warning("Kit colors similar (separation=%.2f) — confirm teams in dashboard", separation)
 
@@ -155,6 +174,7 @@ def run(source: str, roster: str | None = None, ref_points: str | None = None,
         mode = json.loads((mdir / "projection.json").read_text())["mode"]
         tracks = pd.read_parquet(mdir / "tracks_pitch.parquet").dropna(subset=["x_m", "y_m"])
         tracks["team"] = tracks.track_id.astype(str).map(identity["teams"]).fillna("?")
+        tracks = _apply_merge(tracks, identity)
         gk_det = set(tracks[tracks.cls == "goalkeeper"].track_id.unique())
 
         ball = pd.read_parquet(mdir / "ball_pitch.parquet")
@@ -206,11 +226,31 @@ def run(source: str, roster: str | None = None, ref_points: str | None = None,
         mode = json.loads((mdir / "projection.json").read_text())["mode"]
         tracks = pd.read_parquet(mdir / "tracks_pitch.parquet").dropna(subset=["x_m", "y_m"])
         tracks["team"] = tracks.track_id.astype(str).map(identity["teams"]).fillna("?")
+        tracks = _apply_merge(tracks, identity)
         events = pd.read_parquet(mdir / "events.parquet")
         roles = pd.read_parquet(mdir / "roles.parquet")
 
         metrics = compute_metrics(events, tracks, fps, attack_dir, roles, mode=mode)
         metrics.to_parquet(mdir / "metrics.parquet", index=False)
+
+        # keep only identities observed long enough to say anything meaningful
+        min_minutes = s.min_track_seconds / 60
+        rated = metrics[metrics.minutes >= min_minutes]
+        if len(rated) < s.min_rated_players:
+            rated = metrics.nlargest(min(s.min_rated_players, len(metrics)), "minutes")
+        dropped = len(metrics) - len(rated)
+        if dropped:
+            log.warning("%d of %d tracked identities were fragments (<%.0fs) and are not rated",
+                        dropped, len(metrics), s.min_track_seconds)
+        (mdir / "quality.json").write_text(json.dumps({
+            "n_raw_tracks": int(identity.get("n_raw_tracks", len(metrics))),
+            "n_jerseys_read": int(identity.get("n_jerseys_read", 0)),
+            "n_after_merge": int(len(metrics)),
+            "n_rated": int(len(rated)),
+            "n_fragments_dropped": int(dropped),
+            "median_minutes": float(rated.minutes.median()) if len(rated) else 0.0,
+        }))
+        metrics = rated
         ratings = rate_players(metrics, load_weights())
 
         with get_session() as db:

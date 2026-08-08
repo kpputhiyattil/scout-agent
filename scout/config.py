@@ -46,6 +46,12 @@ class Settings(BaseSettings):
     # convert pixels to approximate metres from bounding-box size.
     player_height_m: float = 1.45
 
+    # A tracked identity shorter than this is a fragment, not a player: trackers
+    # lose people behind occlusions and camera cuts. Fragments are excluded from
+    # ratings rather than presented as children with 4 seconds of match time.
+    min_track_seconds: float = 20.0
+    min_rated_players: int = 4   # if the filter leaves fewer, keep the longest instead
+
     # Sampling
     ocr_sample_every_n_frames: int = 12   # ~2x/sec at 25fps
     homography_every_n_frames: int = 30
