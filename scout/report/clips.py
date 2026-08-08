@@ -6,12 +6,15 @@ from pathlib import Path
 
 import pandas as pd
 
+from scout.ingest import ensure_ffmpeg
+
 HIGHLIGHT_TYPES = ("shot", "save", "duel", "interception", "goal")
 
 
 def cut_highlights(video_path: str | Path, events: pd.DataFrame, fps: float,
                    out_dir: str | Path, track_id: int,
                    pre_s: float = 3.0, post_s: float = 3.0, max_clips: int = 5) -> list[Path]:
+    ensure_ffmpeg()
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     actor_col = "actor" if "actor" in events.columns else "winner"

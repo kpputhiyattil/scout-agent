@@ -27,8 +27,9 @@ class Settings(BaseSettings):
     device: str = "cuda"  # "cuda" | "cpu"
 
     # Detection
-    detector_weights: str = "yolov8x.pt"  # COCO fallback (person + sports ball).
-    # Set to a football-specific checkpoint (players/GK/ball/referee) for best results.
+    detector_weights: str = ""  # empty = auto: yolov8x on GPU, yolov8n on CPU.
+    # Set explicitly to override — ideally a football-specific checkpoint
+    # (players/GK/ball/referee classes) for best results.
     detector_conf: float = 0.3
     detect_batch_size: int = 16
     target_fps: int = 25
@@ -49,6 +50,28 @@ class Settings(BaseSettings):
     # LLM
     anthropic_api_key: str = ""
     llm_model: str = "claude-sonnet-4-5"
+
+    def resolve_device(self) -> str:
+        """Requested device, downgraded to cpu when CUDA isn't actually available."""
+        if self.device == "cpu":
+            return "cpu"
+        try:
+            import torch
+            if torch.cuda.is_available():
+                return self.device
+        except ImportError:
+            pass
+        import logging
+        logging.getLogger("scout").warning(
+            "CUDA requested but not available — falling back to CPU (slower). "
+            "Set SCOUT_DEVICE=cpu to silence this.")
+        return "cpu"
+
+    def resolve_detector_weights(self) -> str:
+        """Explicit weights if set, else pick by hardware: yolov8x (GPU) / yolov8n (CPU)."""
+        if self.detector_weights:
+            return self.detector_weights
+        return "yolov8x.pt" if self.resolve_device() == "cuda" else "yolov8n.pt"
 
     @property
     def db_url(self) -> str:

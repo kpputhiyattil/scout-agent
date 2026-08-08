@@ -21,8 +21,8 @@ Ratings are transparent by design: every score comes with the raw KPI evidence, 
 
 ## Prerequisites
 
-- **ffmpeg binary on PATH** — required by ingest, clip cutting, and yt-dlp merging (`ffmpeg-python` is only a wrapper): `winget install Gyan.FFmpeg` (Windows) / `brew install ffmpeg` (macOS)
-- **Deno or Node** — yt-dlp needs a JS runtime for YouTube downloads, or you'll hit 403 errors: `winget install DenoLand.Deno`
+- **ffmpeg** — handled automatically: if no ffmpeg/ffprobe is on PATH, the pip-installed `static-ffmpeg` bundle is used (downloaded on first run). A system ffmpeg on PATH is used if present.
+- **Deno or Node 22+** (required for YouTube) — yt-dlp solves YouTube JS challenges with a JS runtime; without one downloads fail. Installers: https://deno.com (recommended) or https://nodejs.org. Also install `yt-dlp[default]` so the EJS challenge scripts are present.
 - NVIDIA GPU recommended for the perception stage (CPU works, ~6× slower)
 
 ## Quick start
@@ -52,7 +52,7 @@ pytest -q
   Best results: elevated wide-angle view of the whole pitch.
 - **Roster CSV** (optional) — `jersey_number,name,age` to map numbers to kids' names.
 - **Pitch reference points** (recommended for MVP) — 4 clicked pixel→meter points (`examples/refs_example.json`); or drop a pitch-keypoint model at `data/models/pitch_keypoints.pt` for moving-camera homography.
-- **Detector weights** — defaults to COCO `yolov8x.pt` (person + ball). For best results set `SCOUT_DETECTOR_WEIGHTS` to a football-specific checkpoint (player/GK/ball/referee classes).
+- **Detector weights** — auto-selected by hardware: `yolov8x.pt` (accurate) on GPU, `yolov8n.pt` (fast) on CPU. Override with `SCOUT_DETECTOR_WEIGHTS` — ideally a football-specific checkpoint (player/GK/ball/referee classes) for best results.
 
 ## Configuration
 
@@ -61,7 +61,7 @@ Environment variables (or `.env`):
 ```
 SCOUT_DEVICE=cuda                # cuda | cpu
 SCOUT_ANTHROPIC_API_KEY=...      # optional; template notes if unset
-SCOUT_DETECTOR_WEIGHTS=...       # optional football checkpoint
+SCOUT_DETECTOR_WEIGHTS=...       # optional override (default: auto — yolov8x on GPU, yolov8n on CPU)
 ```
 
 ## Privacy

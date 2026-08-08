@@ -1,9 +1,10 @@
 """Detection + tracking: video -> tracks.parquet + ball.parquet (+ debug video).
 
-Default weights are COCO yolov8x (classes: person, sports ball). For best results
-set SCOUT_DETECTOR_WEIGHTS to a football-specific checkpoint trained with classes
-player/goalkeeper/ball/referee (e.g. from the Roboflow football-players-detection
-dataset) — the class mapping below adapts automatically.
+Weights are auto-selected by hardware: COCO yolov8x on GPU, yolov8n on CPU
+(classes: person, sports ball). For best results set SCOUT_DETECTOR_WEIGHTS to a
+football-specific checkpoint trained with classes player/goalkeeper/ball/referee
+(e.g. from the Roboflow football-players-detection dataset) — the class mapping
+below adapts automatically.
 """
 from __future__ import annotations
 
@@ -20,7 +21,7 @@ FOOTBALL_CLASSES = {"player", "goalkeeper", "ball", "referee"}
 
 
 def run_detection_tracking(video_path: str | Path, out_dir: str | Path,
-                           save_debug_video: bool = True) -> tuple[Path, Path]:
+                           save_debug_video: bool = True, progress=None) -> tuple[Path, Path]:
     """Returns (tracks_parquet, ball_parquet).
 
     tracks.parquet: frame, track_id, x1, y1, x2, y2, conf, cls  (people)
@@ -35,12 +36,15 @@ def run_detection_tracking(video_path: str | Path, out_dir: str | Path,
     out_dir.mkdir(parents=True, exist_ok=True)
     tracks_pq, ball_pq = out_dir / "tracks.parquet", out_dir / "ball.parquet"
 
-    model = YOLO(s.detector_weights)
+    device = s.resolve_device()
+    weights = s.resolve_detector_weights()
+    model = YOLO(weights)
     names = {i: n.lower() for i, n in model.names.items()}
     is_football_model = FOOTBALL_CLASSES & set(names.values())
     tracker = sv.ByteTrack(frame_rate=s.target_fps)
 
     cap = cv2.VideoCapture(str(video_path))
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
     writer = None
     if save_debug_video:
         w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -56,7 +60,7 @@ def run_detection_tracking(video_path: str | Path, out_dir: str | Path,
         ok, frame = cap.read()
         if not ok:
             break
-        res = model(frame, conf=s.detector_conf, verbose=False, device=s.device)[0]
+        res = model(frame, conf=s.detector_conf, verbose=False, device=device)[0]
         det = sv.Detections.from_ultralytics(res)
 
         if is_football_model:
@@ -86,6 +90,8 @@ def run_detection_tracking(video_path: str | Path, out_dir: str | Path,
             img = label_ann.annotate(img, people, labels=labels)
             writer.write(img)
         frame_idx += 1
+        if progress and total_frames and frame_idx % 25 == 0:
+            progress(min(1.0, frame_idx / total_frames))
 
     cap.release()
     if writer is not None:

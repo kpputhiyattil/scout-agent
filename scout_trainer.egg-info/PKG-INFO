@@ -1,0 +1,34 @@
+Metadata-Version: 2.4
+Name: scout-trainer
+Version: 0.1.0
+Summary: AI football scouting for youth players: detect, track, identify, and rate kids from match video, per position.
+Requires-Python: >=3.10
+Requires-Dist: numpy>=1.26
+Requires-Dist: pandas>=2.1
+Requires-Dist: pyyaml>=6.0
+Requires-Dist: pydantic>=2.6
+Requires-Dist: pydantic-settings>=2.2
+Requires-Dist: sqlalchemy>=2.0
+Requires-Dist: pyarrow>=15.0
+Provides-Extra: perception
+Requires-Dist: ultralytics>=8.2; extra == "perception"
+Requires-Dist: supervision>=0.25; extra == "perception"
+Requires-Dist: opencv-python>=4.9; extra == "perception"
+Requires-Dist: torch>=2.2; extra == "perception"
+Requires-Dist: easyocr>=1.7; extra == "perception"
+Requires-Dist: scikit-learn>=1.4; extra == "perception"
+Requires-Dist: yt-dlp>=2024.4.9; extra == "perception"
+Requires-Dist: ffmpeg-python>=0.2; extra == "perception"
+Requires-Dist: static-ffmpeg>=2.7; extra == "perception"
+Provides-Extra: ui
+Requires-Dist: streamlit>=1.35; extra == "ui"
+Requires-Dist: plotly>=5.20; extra == "ui"
+Requires-Dist: mplsoccer>=1.4; extra == "ui"
+Requires-Dist: matplotlib>=3.8; extra == "ui"
+Provides-Extra: llm
+Requires-Dist: anthropic>=0.34; extra == "llm"
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+Requires-Dist: ruff>=0.4; extra == "dev"
+Provides-Extra: all
+Requires-Dist: scout-trainer[dev,llm,perception,ui]; extra == "all"

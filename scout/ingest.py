@@ -6,7 +6,9 @@ Normalization makes every downstream model see identical input:
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -15,8 +17,70 @@ from scout.config import get_settings
 from scout.db import Match, get_session
 
 
-def _match_id(source: str) -> str:
+def ensure_ffmpeg() -> None:
+    """Make ffmpeg/ffprobe available, preferring the pip-installed static-ffmpeg bundle."""
+    missing = [b for b in ("ffmpeg", "ffprobe") if shutil.which(b) is None]
+    if not missing:
+        return
+    try:
+        from static_ffmpeg import add_paths
+        add_paths()  # downloads bundled ffmpeg+ffprobe on first use, prepends to PATH
+        missing = [b for b in ("ffmpeg", "ffprobe") if shutil.which(b) is None]
+    except ImportError:
+        pass
+    if missing:
+        raise RuntimeError(
+            f"{' and '.join(missing)} not found. Easiest fix: `pip install static-ffmpeg` "
+            "and retry. Or download ffmpeg from https://www.gyan.dev/ffmpeg/builds/ "
+            "(release-essentials zip), extract, and add its bin folder to PATH, "
+            "then restart the terminal and Streamlit.")
+
+
+def _find_executable(name: str, extra_dirs: list[Path] | None = None) -> str | None:
+    """Resolve an executable on PATH or in known install locations."""
+    found = shutil.which(name)
+    if found:
+        return found
+    candidates: list[Path] = []
+    if extra_dirs:
+        candidates.extend(extra_dirs)
+    home = Path.home()
+    if name == "deno":
+        candidates.extend([
+            home / ".deno" / "bin" / ("deno.exe" if os.name == "nt" else "deno"),
+            Path(os.environ.get("LOCALAPPDATA", "")) / "deno" / "bin" / "deno.exe",
+        ])
+    elif name == "node":
+        candidates.extend([
+            Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "nodejs" / "node.exe",
+            Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "nodejs" / "node.exe",
+        ])
+    for path in candidates:
+        if path and path.is_file():
+            return str(path)
+    return None
+
+
+def _js_runtimes() -> dict[str, dict[str, str]]:
+    """Pick a JS runtime for yt-dlp YouTube challenge solving (deno preferred, then node)."""
+    deno = _find_executable("deno")
+    if deno:
+        return {"deno": {"path": deno}}
+    node = _find_executable("node")
+    if node:
+        return {"node": {"path": node}}
+    raise RuntimeError(
+        "YouTube downloads require a JavaScript runtime (Deno or Node). "
+        "Install Deno from https://deno.com (recommended) or Node 22+ from "
+        "https://nodejs.org, then restart the terminal and Streamlit.")
+
+
+def match_id_for(source: str) -> str:
+    """Deterministic match id for a source (URL or path) — safe to call before ingest."""
     return hashlib.sha1(source.encode()).hexdigest()[:12]
+
+
+_match_id = match_id_for
 
 
 def _probe(video: Path) -> dict:
@@ -31,40 +95,88 @@ def _probe(video: Path) -> dict:
     return {"fps": fps, "duration_s": float(info["format"].get("duration", 0.0))}
 
 
-def _download(url: str, dest: Path) -> Path:
-    """Download with yt-dlp. Fails fast on DRM/broken URLs before any GPU time."""
+def _download(url: str, dest: Path, progress=None) -> Path:
+    """Download with yt-dlp (Python API). Fails fast on DRM/broken URLs before any GPU time."""
+    if importlib.util.find_spec("yt_dlp") is None:
+        raise RuntimeError(
+            "yt-dlp is not installed in this environment. Run `pip install \"yt-dlp[default]\"` "
+            '(or `pip install -e ".[perception]"`), then restart Streamlit.')
+    if importlib.util.find_spec("yt_dlp_ejs") is None:
+        raise RuntimeError(
+            "yt-dlp-ejs is missing. Run `pip install \"yt-dlp[default]\"` "
+            "(or `pip install yt-dlp-ejs`), then restart Streamlit.")
+    ensure_ffmpeg()  # yt-dlp needs ffmpeg to merge separate video/audio streams
+    import yt_dlp
     raw = dest / "raw.mp4"
-    subprocess.run(
-        ["yt-dlp", "-f", "bv*[height<=1080]+ba/b[height<=1080]", "--merge-output-format", "mp4",
-         "-o", str(raw), url],
-        check=True,
-    )
+
+    def hook(d):
+        if progress and d.get("status") == "downloading":
+            total = d.get("total_bytes") or d.get("total_bytes_estimate")
+            if total:
+                progress(d.get("downloaded_bytes", 0) / total)
+
+    opts = {
+        "format": "bv*[height<=1080]+ba/b[height<=1080]",
+        "merge_output_format": "mp4",
+        "outtmpl": str(raw),
+        "progress_hooks": [hook],
+        "quiet": True,
+        "noprogress": True,
+        "js_runtimes": _js_runtimes(),
+    }
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            ydl.download([url])
+    except yt_dlp.utils.DownloadError as exc:
+        msg = str(exc)
+        if "No supported JavaScript runtime" in msg or "JS runtime" in msg:
+            raise RuntimeError(
+                "YouTube download failed: no usable JavaScript runtime. "
+                "Install Deno (https://deno.com) or Node 22+ (https://nodejs.org), "
+                "then restart Streamlit.") from exc
+        raise
     return raw
 
 
-def _normalize(src: Path, dest: Path) -> Path:
+def _normalize(src: Path, dest: Path, progress=None) -> Path:
     s = get_settings()
     out = dest / "video.mp4"
-    subprocess.run(
+    duration = _probe(src)["duration_s"] or 0
+    proc = subprocess.Popen(
         ["ffmpeg", "-y", "-i", str(src),
          "-vf", f"scale=-2:{s.target_height},fps={s.target_fps}",
          "-c:v", "libx264", "-preset", "fast", "-crf", "23", "-pix_fmt", "yuv420p", "-an",
+         "-progress", "pipe:1", "-nostats", "-loglevel", "error",
          str(out)],
-        check=True, capture_output=True,
-    )
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    for line in proc.stdout:  # ffmpeg emits out_time_ms= lines (microseconds)
+        if progress and duration and line.startswith("out_time_ms="):
+            try:
+                progress(min(1.0, int(line.split("=")[1]) / 1e6 / duration))
+            except ValueError:
+                pass
+    if proc.wait() != 0:
+        raise RuntimeError(f"ffmpeg failed to normalize {src.name}")
     return out
 
 
-def ingest(source: str) -> str:
-    """source = URL or local path. Returns match_id. Idempotent."""
+def ingest(source: str, progress=None) -> str:
+    """source = URL or local path. Returns match_id. Idempotent.
+
+    progress: optional callable(fraction 0..1) for live status reporting.
+    """
     s = get_settings()
     mid = _match_id(source)
     mdir = s.match_dir(mid)
     video = mdir / "video.mp4"
+    p = progress or (lambda f: None)
 
+    ensure_ffmpeg()
     if not video.exists():
         if source.startswith(("http://", "https://")):
-            raw = _download(source, mdir)
+            # download = first 90% of the stage, normalize = last 10%
+            raw = _download(source, mdir, progress=lambda f: p(f * 0.9))
+            _normalize(raw, mdir, progress=lambda f: p(0.9 + f * 0.1))
         else:
             raw = Path(source)
             if not raw.exists():
@@ -72,7 +184,7 @@ def ingest(source: str) -> str:
             if raw.resolve() != (mdir / raw.name).resolve():
                 shutil.copy(raw, mdir / raw.name)
                 raw = mdir / raw.name
-        _normalize(raw, mdir)
+            _normalize(raw, mdir, progress=p)
 
     meta = _probe(video)
     with get_session() as db:

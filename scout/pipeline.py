@@ -36,6 +36,18 @@ def _set_status(match_id: str, stage: str, status: str, detail: str = "") -> Non
         db.commit()
 
 
+def _pct_reporter(match_id: str, stage: str):
+    """Throttled progress callback: writes 'NN%' to JobStatus.detail on whole-percent change."""
+    last = {"p": -1}
+
+    def cb(frac: float) -> None:
+        p = int(max(0.0, min(1.0, frac)) * 100)
+        if p != last["p"]:
+            last["p"] = p
+            _set_status(match_id, stage, "running", f"{p}%")
+    return cb
+
+
 def _stage_done(match_id: str, stage: str) -> bool:
     with get_session() as db:
         row = db.query(JobStatus).filter_by(match_id=match_id, stage=stage, status="done").first()
@@ -47,8 +59,14 @@ def run(source: str, roster: str | None = None, ref_points: str | None = None,
     s = get_settings()
 
     # ---- ingest ----
-    from scout.ingest import ingest
-    match_id = ingest(source)
+    from scout.ingest import ingest, match_id_for
+    match_id = match_id_for(source)
+    _set_status(match_id, "ingest", "running", "0%")
+    try:
+        ingest(source, progress=_pct_reporter(match_id, "ingest"))
+    except Exception as e:
+        _set_status(match_id, "ingest", "failed", f"{e}\n{traceback.format_exc()}")
+        raise
     _set_status(match_id, "ingest", "done")
     mdir = s.match_dir(match_id)
     video = mdir / "video.mp4"
@@ -76,7 +94,7 @@ def run(source: str, roster: str | None = None, ref_points: str | None = None,
     @stage("perceive")
     def perceive():
         from scout.perception.detect import run_detection_tracking
-        run_detection_tracking(video, mdir)
+        run_detection_tracking(video, mdir, progress=_pct_reporter(match_id, "perceive"))
 
     # ---- identify: teams + jerseys ----
     @stage("identify")

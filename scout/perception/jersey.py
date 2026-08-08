@@ -46,7 +46,8 @@ def vote_jerseys(reads: list[Read], min_score: float = 1.0,
 
 def _ocr_reader():
     import easyocr
-    return easyocr.Reader(["en"], gpu=True)
+    from scout.config import get_settings
+    return easyocr.Reader(["en"], gpu=get_settings().resolve_device() == "cuda")
 
 
 def read_jerseys(video_path: str | Path, tracks: pd.DataFrame,

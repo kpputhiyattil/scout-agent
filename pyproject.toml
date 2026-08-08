@@ -22,8 +22,9 @@ perception = [
     "torch>=2.2",
     "easyocr>=1.7",
     "scikit-learn>=1.4",
-    "yt-dlp>=2024.4.9",
+    "yt-dlp[default]>=2024.4.9",
     "ffmpeg-python>=0.2",
+    "static-ffmpeg>=2.7",
 ]
 # Coach-facing dashboard
 ui = [

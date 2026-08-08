@@ -1,6 +1,13 @@
 # Full stack (perception + UI + LLM + dev). Mirrors pyproject.toml [all].
 # pip install -r requirements.txt
 # CPU-only? Install torch first per https://pytorch.org/get-started/locally/
+#
+# ffmpeg/ffprobe are provided automatically via static-ffmpeg (below).
+# Required for YouTube: Deno (recommended) or Node 22+ on PATH — yt-dlp solves
+# YouTube JS challenges with it (https://deno.com / https://nodejs.org)
+
+# The scout package itself (editable)
+-e .
 
 # Core
 numpy>=1.26
@@ -18,8 +25,9 @@ supervision>=0.25
 opencv-python>=4.9
 easyocr>=1.7
 scikit-learn>=1.4
-yt-dlp>=2024.4.9
+yt-dlp[default]>=2024.4.9
 ffmpeg-python>=0.2
+static-ffmpeg>=2.7   # bundles ffmpeg+ffprobe binaries; used when none on PATH
 
 # Dashboard
 streamlit>=1.35
