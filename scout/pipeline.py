@@ -189,7 +189,9 @@ def run(source: str, roster: str | None = None, ref_points: str | None = None,
         saves = E.detect_saves(shots, spells, fps, gk_tracks)
         duels = E.detect_duels(spells, tracks, fps)
 
-        all_events = pd.concat([trans, shots, saves, duels], ignore_index=True)
+        parts = [df for df in (trans, shots, saves, duels) if not df.empty]
+        all_events = (pd.concat(parts, ignore_index=True) if parts
+                      else pd.DataFrame(columns=["frame", "type", "actor"]))
         all_events.to_parquet(mdir / "events.parquet", index=False)
         roles.to_parquet(mdir / "roles.parquet", index=False)
         (mdir / "attack_dir.json").write_text(json.dumps(attack_dir))
