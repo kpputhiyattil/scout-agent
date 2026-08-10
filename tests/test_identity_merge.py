@@ -54,6 +54,35 @@ class TestMergeAppliedToTracks:
         tracks = pd.DataFrame({"frame": [0, 1], "track_id": [3, 4]})
         assert _apply_merge(tracks, {}).track_id.tolist() == [3, 4]
 
+    def test_overlapping_fragments_collapse_to_one_row_per_frame(self):
+        """Two fragments with the same number can coexist in a frame; if both survive,
+        every (frame, track_id) lookup downstream returns two rows and crashes."""
+        from scout.pipeline import _apply_merge
+        tracks = pd.DataFrame({
+            "frame": [0, 0, 1, 1],
+            "track_id": [1, 2, 1, 2],
+            "x1": [0, 0, 0, 0], "y1": [0, 0, 0, 0],
+            "x2": [10, 30, 10, 30], "y2": [10, 30, 10, 30],   # id 2 has the larger box
+            "x_m": [1.0, 2.0, 1.0, 2.0], "y_m": [1.0, 2.0, 1.0, 2.0],
+        })
+        out = _apply_merge(tracks, {"merge": {"1": 1, "2": 1}})
+        assert not out.duplicated(subset=["frame", "track_id"]).any()
+        assert len(out) == 2
+        assert out.x_m.tolist() == [2.0, 2.0], "keeps the largest detection"
+
+    def test_duel_detection_survives_merged_ids(self):
+        """Regression: merged tracks used to make detect_duels raise
+        'The truth value of a Series is ambiguous'."""
+        from scout.analytics.events import detect_duels
+        tracks = pd.DataFrame({
+            "frame": [10, 10, 10],
+            "track_id": [1, 1, 2],          # duplicate id 1 in the same frame
+            "x_m": [5.0, 5.1, 6.0], "y_m": [5.0, 5.0, 5.0],
+        })
+        spells = pd.DataFrame({"start": [0, 10], "owner": [1, 2], "team": ["A", "B"]})
+        duels = detect_duels(spells, tracks, fps=25.0)
+        assert len(duels) == 1 and duels.winner.iat[0] == 2
+
 
 class TestVotingUnchanged:
     def test_weak_evidence_still_yields_nothing(self):

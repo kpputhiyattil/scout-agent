@@ -49,12 +49,32 @@ def _pct_reporter(match_id: str, stage: str):
 
 
 def _apply_merge(tracks: pd.DataFrame, identity: dict) -> pd.DataFrame:
-    """Rewrite track ids to their canonical player id (jersey-based fragment merge)."""
+    """Rewrite track ids to their canonical player id (jersey-based fragment merge).
+
+    Two fragments carrying the same number can overlap in a frame (OCR misread, or
+    the tracker holding both an old and a new box for one child). A player must have
+    exactly one position per frame or every downstream lookup becomes ambiguous, so
+    overlaps collapse to the largest detection — the one the detector was surest of.
+    """
     merge = {int(k): int(v) for k, v in identity.get("merge", {}).items()}
     if not merge:
         return tracks
     tracks = tracks.copy()
     tracks["track_id"] = tracks.track_id.map(merge).fillna(tracks.track_id).astype(int)
+
+    dupes = tracks.duplicated(subset=["frame", "track_id"], keep=False)
+    if dupes.any():
+        log.info("merge produced %d overlapping rows; keeping the largest box per frame",
+                 int(dupes.sum()))
+        area = ((tracks.x2 - tracks.x1) * (tracks.y2 - tracks.y1)
+                if {"x1", "x2", "y1", "y2"} <= set(tracks.columns)
+                else tracks.get("conf", pd.Series(1.0, index=tracks.index)))
+        tracks = (tracks.assign(_rank=area)
+                        .sort_values("_rank", ascending=False)
+                        .drop_duplicates(subset=["frame", "track_id"])
+                        .drop(columns="_rank")
+                        .sort_values(["frame", "track_id"])
+                        .reset_index(drop=True))
     return tracks
 
 

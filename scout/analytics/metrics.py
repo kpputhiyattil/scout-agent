@@ -80,13 +80,21 @@ def compute_metrics(events: pd.DataFrame, tracks: pd.DataFrame, fps: float,
 
         # forward pass: receiver is further along attack axis than passer at pass frame
         fwd = 0
-        pos_at = tracks.set_index(["frame", "track_id"])
-        for r in p_made.itertuples():
+        pos_at = tracks.set_index(["frame", "track_id"]).sort_index()
+
+        def _x(frame, track_id):
+            """x of one player in one frame; tolerates duplicate rows after merging."""
             try:
-                dx = pos_at.loc[(r.frame, int(r.target)), "x_m"] - pos_at.loc[(r.frame, tid), "x_m"]
-                fwd += int(dx * d > 2)
+                v = pos_at.loc[(frame, int(track_id)), "x_m"]
             except KeyError:
-                pass
+                return None
+            return float(v.iloc[0]) if hasattr(v, "iloc") else float(v)
+
+        for r in p_made.itertuples():
+            x_to, x_from = _x(r.frame, r.target), _x(r.frame, tid)
+            if x_to is None or x_from is None:
+                continue
+            fwd += int((x_to - x_from) * d > 2)
 
         my_shots = shots[col(shots, "actor", -1) == tid]
         opp_shots_on_t = shots[(col(shots, "on_target") == 1)

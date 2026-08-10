@@ -178,15 +178,23 @@ def detect_duels(spells: pd.DataFrame, tracks: pd.DataFrame, fps: float,
     """Duel = possession flips between opposing players who were within radius
     of each other at the flip. Winner = new owner."""
     radius_m = radius_m or get_settings().duel_radius_m
-    pos = tracks.set_index(["frame", "track_id"])[["x_m", "y_m"]]
+    pos = tracks.set_index(["frame", "track_id"])[["x_m", "y_m"]].sort_index()
+
+    def at(frame, track_id):
+        """Position of one player in one frame, or None. Tolerates duplicate rows."""
+        try:
+            row = pos.loc[(frame, track_id)]
+        except KeyError:
+            return None
+        return row.iloc[0] if isinstance(row, pd.DataFrame) else row
+
     rows = []
     for prev, nxt in zip(spells.itertuples(), spells.iloc[1:].itertuples()):
         if prev.team == nxt.team or "?" in (prev.team, nxt.team):
             continue
         f = nxt.start
-        try:
-            a, b = pos.loc[(f, prev.owner)], pos.loc[(f, nxt.owner)]
-        except KeyError:
+        a, b = at(f, prev.owner), at(f, nxt.owner)
+        if a is None or b is None:
             continue
         if np.hypot(a.x_m - b.x_m, a.y_m - b.y_m) <= radius_m:
             rows.append((int(f), "duel", int(nxt.owner), int(prev.owner)))
