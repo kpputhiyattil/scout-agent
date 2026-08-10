@@ -23,17 +23,25 @@ class Read:
 
 
 def vote_jerseys(reads: list[Read], min_score: float = 1.0,
-                 min_margin: float = 0.55) -> dict[int, int]:
+                 min_margin: float = 0.55, max_number: int = 99,
+                 allowed: set[int] | None = None) -> dict[int, int]:
     """Weighted majority vote per track.
 
     weight = conf * sqrt(crop_area). A track gets a number only if the winner's
     score is >= min_score and holds >= min_margin of the total vote mass —
     otherwise stay honest and return nothing for that track.
+
+    max_number bounds reads to plausible squad numbers, and `allowed` (from a
+    roster) restricts them to numbers that actually exist in this team — both
+    reject OCR noise such as a "7" on an advertising board read as "76".
     """
     scores: dict[int, dict[int, float]] = defaultdict(lambda: defaultdict(float))
     for r in reads:
-        if 0 < r.number < 100:
-            scores[r.track_id][r.number] += r.conf * float(np.sqrt(max(r.crop_area, 1.0)))
+        if not (0 < r.number <= max_number):
+            continue
+        if allowed is not None and r.number not in allowed:
+            continue
+        scores[r.track_id][r.number] += r.conf * float(np.sqrt(max(r.crop_area, 1.0)))
 
     result: dict[int, int] = {}
     for tid, tally in scores.items():
@@ -69,15 +77,25 @@ def _prepare_crop(crop, min_height: int = 128):
     return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
 
+def roster_numbers(roster_csv: str | Path | None) -> set[int] | None:
+    """Squad numbers from the roster, used to reject impossible OCR reads."""
+    if roster_csv is None or not Path(roster_csv).exists():
+        return None
+    nums = pd.read_csv(roster_csv)["jersey_number"].dropna().astype(int)
+    return set(nums) or None
+
+
 def read_jerseys(video_path: str | Path, tracks: pd.DataFrame,
-                 sample_every: int | None = None) -> dict[int, int]:
+                 sample_every: int | None = None,
+                 allowed: set[int] | None = None) -> dict[int, int]:
     """Run OCR over sampled torso crops, return {track_id: jersey_number}."""
     import cv2
 
     from scout.config import get_settings
     from scout.perception.detect import torso_crop
 
-    sample_every = sample_every or get_settings().ocr_sample_every_n_frames
+    s = get_settings()
+    sample_every = sample_every or s.ocr_sample_every_n_frames
     reader = _ocr_reader()
     reads: list[Read] = []
     cap = cv2.VideoCapture(str(video_path))
@@ -99,7 +117,7 @@ def read_jerseys(video_path: str | Path, tracks: pd.DataFrame,
                 if text.isdigit():
                     reads.append(Read(int(r.track_id), int(text), float(conf), area))
     cap.release()
-    return vote_jerseys(reads)
+    return vote_jerseys(reads, max_number=s.max_jersey_number, allowed=allowed)
 
 
 def merge_map(jerseys: dict[int, int], teams: dict[int, str]) -> dict[int, int]:

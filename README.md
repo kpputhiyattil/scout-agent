@@ -58,7 +58,17 @@ pytest -q
 
 Tracking quality, not model size, is what limits results. A tracker loses a player at every hard cut, fast pan or occlusion and issues a new id — an edited highlights reel produced **1239 track ids for ~12 children**, i.e. fragments of less than a second each, from which no honest rating can be computed.
 
-The pipeline defends against this in three ways:
+Only players the coach can actually identify are rated. A score attached to "some child we tracked for four seconds" is worse than no score, so three filters run before rating:
+
+| Filter | Setting | Why |
+|---|---|---|
+| Must have a jersey number | `SCOUT_REQUIRE_JERSEY_FOR_RATING` (default on) | a rating no one can attribute to a child is unusable |
+| Must be observed ≥ 20 s | `SCOUT_MIN_TRACK_SECONDS` | shorter identities are tracking fragments |
+| Squad-size cap per team | `SCOUT_MAX_PLAYERS_PER_TEAM` (default 16) | more than a squad means duplicate identities |
+
+Jersey numbers are additionally bounded by `SCOUT_MAX_JERSEY_NUMBER` (default 30), and a roster CSV restricts OCR to numbers that actually exist in the squad — the single most effective accuracy improvement available. If no number is readable anywhere, the pipeline still rates the longest tracks rather than returning nothing, and says so.
+
+The pipeline defends against fragmentation in three further ways:
 
 - **Fragment merging** — tracks reading the same jersey number for the same team are stitched into one player (`identity.json → merge`). Jersey OCR is therefore not a nice-to-have: it is the identity anchor.
 - **Fragment filtering** — identities observed for less than `SCOUT_MIN_TRACK_SECONDS` (default 20 s) are excluded from ratings rather than presented as children with four seconds of match time.
@@ -80,6 +90,20 @@ Not every clip is a fixed wide-angle full-pitch recording, so the pipeline adapt
 | Positions | heatmap centroid on pitch | rough guess from frame position — **coach should correct** |
 
 In camera-relative mode unmeasurable KPIs are stored as NaN rather than as invented numbers; the rating engine drops them and renormalizes the remaining weights, so a score always reflects only what was actually observed. The dashboard shows a banner, and scouting notes are told not to comment on fitness or positioning.
+
+## Exports
+
+Every match produces two artifacts for sharing:
+
+- **`ratings_<match>.csv`** — one row per player: identity, position, minutes, rating, sub-scores and every raw KPI.
+- **`scouting_report_<match>.docx`** — coach-facing Word summary: what the footage could and couldn't measure, standouts by position, squad table (top 30) and per-player notes.
+
+```bash
+python -m scout.report.export --latest              # or --match <id>
+python -m scout.report.export --match <id> --out reports/
+```
+
+Also available as download buttons in the dashboard, and as a cell in the Colab notebook. Players without a roster name are labelled by team and number (`B #14`), which a coach can match to a child on the pitch.
 
 ## Configuration
 

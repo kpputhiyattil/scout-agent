@@ -142,11 +142,13 @@ def run(source: str, roster: str | None = None, ref_points: str | None = None,
     # ---- identify: teams + jerseys ----
     @stage("identify")
     def identify():
-        from scout.perception.jersey import join_roster, merge_map, read_jerseys
+        from scout.perception.jersey import (join_roster, merge_map, read_jerseys,
+                                             roster_numbers)
         from scout.perception.team import assign_teams
         tracks = pd.read_parquet(mdir / "tracks.parquet")
         teams, separation = assign_teams(video, tracks)
-        jerseys = read_jerseys(video, tracks)
+        # a roster turns OCR from open-ended guessing into a closed-set match
+        jerseys = read_jerseys(video, tracks, allowed=roster_numbers(roster))
         names = join_roster(jerseys, roster)
         # trackers fragment identities on moving/cut footage; the jersey number
         # is the only stable anchor for stitching fragments back into one player
@@ -266,21 +268,49 @@ def run(source: str, roster: str | None = None, ref_points: str | None = None,
         metrics = compute_metrics(events, tracks, fps, attack_dir, roles, mode=mode)
         metrics.to_parquet(mdir / "metrics.parquet", index=False)
 
-        # keep only identities observed long enough to say anything meaningful
+        rated = metrics
+        n_all = len(metrics)
+
+        # 1. a rating no one can attribute to a child is not worth showing
+        n_unidentified = 0
+        if s.require_jersey_for_rating:
+            jersey_of = identity.get("jerseys", {})
+            has_jersey = rated.track_id.astype(str).map(lambda t: t in jersey_of)
+            n_unidentified = int((~has_jersey).sum())
+            if has_jersey.any():
+                rated = rated[has_jersey]
+            else:
+                log.warning("No jersey numbers were read at all — rating unidentified tracks "
+                            "so the run still produces output; identities are unknown")
+
+        # 2. an identity seen for a few seconds is a tracking fragment, not a player
         min_minutes = s.min_track_seconds / 60
-        rated = metrics[metrics.minutes >= min_minutes]
-        if len(rated) < s.min_rated_players:
-            rated = metrics.nlargest(min(s.min_rated_players, len(metrics)), "minutes")
-        dropped = len(metrics) - len(rated)
-        if dropped:
-            log.warning("%d of %d tracked identities were fragments (<%.0fs) and are not rated",
-                        dropped, len(metrics), s.min_track_seconds)
+        long_enough = rated[rated.minutes >= min_minutes]
+        n_fragments = len(rated) - len(long_enough)
+        rated = long_enough if len(long_enough) >= s.min_rated_players else \
+            rated.nlargest(min(s.min_rated_players, len(rated)), "minutes")
+
+        # 3. a squad has a squad's worth of players; more means duplicate identities
+        n_oversized = 0
+        if s.max_players_per_team and "team" in rated.columns:
+            capped = (rated.sort_values("minutes", ascending=False)
+                           .groupby("team", group_keys=False)
+                           .head(s.max_players_per_team))
+            n_oversized = len(rated) - len(capped)
+            rated = capped
+
+        if n_all != len(rated):
+            log.warning("rating %d of %d identities (%d unidentified, %d fragments, "
+                        "%d over squad size)", len(rated), n_all, n_unidentified,
+                        n_fragments, n_oversized)
         (mdir / "quality.json").write_text(json.dumps({
-            "n_raw_tracks": int(identity.get("n_raw_tracks", len(metrics))),
+            "n_raw_tracks": int(identity.get("n_raw_tracks", n_all)),
             "n_jerseys_read": int(identity.get("n_jerseys_read", 0)),
-            "n_after_merge": int(len(metrics)),
+            "n_after_merge": int(n_all),
             "n_rated": int(len(rated)),
-            "n_fragments_dropped": int(dropped),
+            "n_unidentified_dropped": n_unidentified,
+            "n_fragments_dropped": int(n_fragments),
+            "n_over_squad_size_dropped": int(n_oversized),
             "median_minutes": float(rated.minutes.median()) if len(rated) else 0.0,
         }))
         metrics = rated
@@ -294,10 +324,13 @@ def run(source: str, roster: str | None = None, ref_points: str | None = None,
             role_conf = roles.set_index("track_id")["confidence"]
             for _, r in metrics.iterrows():
                 tid = int(r.track_id)
+                jersey = identity["jerseys"].get(str(tid))
+                # no roster name: identify by team + number, which a coach can actually
+                # match to a child on the pitch ("B #14"), not by a meaningless "Unknown"
+                fallback = f"{r.team} #{jersey}" if jersey else f"{r.team} track {tid}"
                 p = Player(match_id=match_id, track_id=tid, team=r.team,
-                           jersey=identity["jerseys"].get(str(tid)),
-                           name=identity["names"].get(str(tid),
-                                f"Unknown #{identity['jerseys'].get(str(tid), '?')}"),
+                           jersey=jersey,
+                           name=identity["names"].get(str(tid), fallback),
                            role=r.role, role_confidence=float(role_conf.get(tid, 0)),
                            minutes=float(r.minutes))
                 db.add(p)

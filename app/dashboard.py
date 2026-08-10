@@ -196,6 +196,12 @@ if (mdir / "quality.json").exists():
     c2.metric("Jersey numbers read", q["n_jerseys_read"])
     c3.metric("Players rated", q["n_rated"])
     c4.metric("Median minutes", round(q["median_minutes"], 1))
+    excluded = {"unidentified (no jersey number)": q.get("n_unidentified_dropped", 0),
+                "tracking fragments": q.get("n_fragments_dropped", 0),
+                "beyond squad size": q.get("n_over_squad_size_dropped", 0)}
+    if any(excluded.values()):
+        st.caption("Excluded from ratings — " + ", ".join(
+            f"{v} {k}" for k, v in excluded.items() if v))
     if q["n_raw_tracks"] > 4 * max(q["n_rated"], 1):
         st.error(
             f"**Heavy identity fragmentation** — {q['n_raw_tracks']} separate tracks were "
@@ -242,7 +248,23 @@ for col, (role, label) in zip(best_cols, ROLE_LABEL.items()):
 
 st.subheader("Squad ratings")
 st.dataframe(df, hide_index=True, use_container_width=True)
-st.download_button("Export CSV", df.to_csv(index=False), f"ratings_{mid}.csv")
+
+d1, d2 = st.columns(2)
+with d1:
+    from scout.report.export import ratings_frame
+    st.download_button("⬇ Full ratings CSV", ratings_frame(mid).to_csv(index=False),
+                       f"ratings_{mid}.csv", mime="text/csv",
+                       help="Every player, sub-score and raw KPI")
+with d2:
+    try:
+        from scout.report.export import export_docx
+        doc_path = export_docx(mid, mdir / "reports" / f"scouting_report_{mid}.docx")
+        st.download_button("⬇ Word scouting report", doc_path.read_bytes(),
+                           doc_path.name,
+                           mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                           help="Coach-facing summary with caveats, standouts and notes")
+    except RuntimeError as e:
+        st.caption(str(e))
 
 # ---------- player detail ----------
 st.divider()

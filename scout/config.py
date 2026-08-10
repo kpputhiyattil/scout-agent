@@ -52,6 +52,13 @@ class Settings(BaseSettings):
     min_track_seconds: float = 20.0
     min_rated_players: int = 4   # if the filter leaves fewer, keep the longest instead
 
+    # A rating is only useful if the coach can tell which child it describes, and
+    # the jersey number is the only identifier available. Unidentified tracks are
+    # also, in practice, exactly the fragments that pollute the results.
+    require_jersey_for_rating: bool = True
+    max_jersey_number: int = 30      # youth squads; rejects OCR noise like "76"
+    max_players_per_team: int = 16   # squad + subs; more than this means bad reads
+
     # Sampling
     ocr_sample_every_n_frames: int = 12   # ~2x/sec at 25fps
     homography_every_n_frames: int = 30
