@@ -243,8 +243,17 @@ def run(source: str, roster: str | None = None, ref_points: str | None = None,
         trans = E.detect_transitions(spells, fps)
         saves = E.detect_saves(shots, spells, fps, gk_tracks)
         duels = E.detect_duels(spells, tracks, fps)
+        # goals need a real goal line to cross — impossible without a pitch reference
+        if mode == "relative":
+            goals = pd.DataFrame(columns=["frame", "type", "actor", "scoring_team"])
+        else:
+            team_of = tracks.groupby("track_id")["team"].agg(lambda x: x.mode().iat[0]).to_dict()
+            goals = E.detect_goals(ball, spells, fps, attack_dir, team_of)
+            if len(goals):
+                log.info("goals detected: %d (%d own goals)",
+                         int((goals.type == "goal").sum()), int((goals.type == "own_goal").sum()))
 
-        parts = [df for df in (trans, shots, saves, duels) if not df.empty]
+        parts = [df for df in (trans, shots, saves, duels, goals) if not df.empty]
         all_events = (pd.concat(parts, ignore_index=True) if parts
                       else pd.DataFrame(columns=["frame", "type", "actor"]))
         all_events.to_parquet(mdir / "events.parquet", index=False)

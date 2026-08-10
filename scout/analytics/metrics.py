@@ -67,6 +67,7 @@ def compute_metrics(events: pd.DataFrame, tracks: pd.DataFrame, fps: float,
     passes, losses = ev("pass"), ev("loss")
     inter, duels = ev("interception"), ev("duel")
     shots, saves = ev("shot"), ev("save")
+    goals, own_goals = ev("goal"), ev("own_goal")
 
     rows = []
     for tid in phys.index:
@@ -121,7 +122,10 @@ def compute_metrics(events: pd.DataFrame, tracks: pd.DataFrame, fps: float,
             "clearances_p90": _p90(len(ev("clearance")[ev("clearance").actor == tid]) if len(ev("clearance")) else 0, m),
             "shots_p90": _p90(len(my_shots), m),
             "shots_on_target_p90": _p90(float(my_shots.on_target.sum(skipna=True)) if len(my_shots) else 0, m),
-            "goals_p90": _p90(len(ev("goal")[ev("goal").actor == tid]) if len(ev("goal")) else 0, m),
+            "goals_p90": _p90(len(goals[col(goals, "actor", -1) == tid]), m),
+            # recorded for the coach's context, deliberately NOT weighted: penalising a
+            # child's development score for an own goal is not defensible
+            "own_goals": float(len(own_goals[col(own_goals, "actor", -1) == tid])),
             "chances_created_p90": _p90(sum(1 for r in p_made.itertuples()
                                             if len(shots[(shots.actor == r.target)
                                                          & (shots.frame - r.frame < 5 * fps)
@@ -131,8 +135,14 @@ def compute_metrics(events: pd.DataFrame, tracks: pd.DataFrame, fps: float,
             "final_third_touches_p90": _p90(float(ft) * len(p_made) if len(p_made) else 0, m),
             "saves_p90": _p90(len(my_saves), m),
             "save_pct": 100 * len(my_saves) / len(opp_shots_on_t) if len(opp_shots_on_t) else 0.0,
-            "goals_conceded_p90": _p90(max(0, len(opp_shots_on_t) - len(my_saves)), m)
-                                   if role_of.get(tid) == "GK" else 0.0,
+            # real goals against this team when goal detection ran; otherwise the
+            # on-target-shots-minus-saves proxy
+            "goals_conceded_p90": _p90(
+                len(pd.concat([goals, own_goals])[
+                    col(pd.concat([goals, own_goals]), "scoring_team", None) != team])
+                if len(goals) or len(own_goals)
+                else max(0, len(opp_shots_on_t) - len(my_saves)), m)
+                if role_of.get(tid) == "GK" else 0.0,
             "sweeper_actions_p90": _p90(len(inter[inter.actor == tid]), m)
                                     if role_of.get(tid) == "GK" else 0.0,
             "distance_km_p90": _p90(phys.loc[tid, "distance_km"], m),

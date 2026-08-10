@@ -159,6 +159,62 @@ def detect_shots(ball: pd.DataFrame, possession: pd.DataFrame, fps: float,
     return pd.DataFrame(rows, columns=["frame", "type", "actor", "on_target"])
 
 
+GOAL_HALF_WIDTH_M = 3.66      # a 7.32 m goal; youth goals are smaller but this is tolerant
+GOAL_LINE_TOLERANCE_M = 1.0
+
+
+def detect_goals(ball: pd.DataFrame, spells: pd.DataFrame, fps: float,
+                 attack_dir: dict[str, int], team_of: dict[int, str],
+                 cooldown_s: float = 10.0, credit_window_s: float = 10.0) -> pd.DataFrame:
+    """Goals and own goals, from the ball crossing a goal line between the posts.
+
+    Requires true pitch coordinates — in camera-relative mode there is no goal line
+    to cross, so this cannot run and no goals are reported (better than inventing them).
+
+    Credit goes to the last player who had possession within `credit_window_s`. If that
+    player's team is the one *defending* the goal that was scored in, it is an own goal:
+    type='own_goal', and it is NOT counted as a goal for the scorer.
+
+    Returns events: frame, type ('goal'|'own_goal'), actor, scoring_team.
+    """
+    cols = ["frame", "type", "actor", "scoring_team"]
+    b = ball.dropna(subset=["x_m", "y_m"]).sort_values("frame")
+    if len(b) < 2 or not attack_dir:
+        return pd.DataFrame(columns=cols)
+
+    # which team defends which goal: a team attacking toward x=L (d=+1) defends x=0
+    defender_of = {0.0: None, PITCH_LENGTH_M: None}
+    for team, d in attack_dir.items():
+        defender_of[0.0 if d > 0 else PITCH_LENGTH_M] = team
+
+    in_mouth = (b.y_m - PITCH_WIDTH_M / 2).abs() <= GOAL_HALF_WIDTH_M
+    rows, cooldown = [], -np.inf
+    prev_x = b.x_m.shift()
+
+    for r, px, mouth in zip(b.itertuples(), prev_x, in_mouth):
+        if not mouth or not np.isfinite(px) or r.frame - cooldown < cooldown_s * fps:
+            continue
+        crossed_left = px > GOAL_LINE_TOLERANCE_M >= r.x_m
+        crossed_right = px < PITCH_LENGTH_M - GOAL_LINE_TOLERANCE_M <= r.x_m
+        if not (crossed_left or crossed_right):
+            continue
+
+        goal_x = 0.0 if crossed_left else PITCH_LENGTH_M
+        defending = defender_of.get(goal_x)
+        scoring = next((t for t in attack_dir if t != defending), None)
+
+        recent = spells[(spells.end <= r.frame)
+                        & (spells.end >= r.frame - credit_window_s * fps)]
+        actor = int(recent.iloc[-1].owner) if len(recent) else None
+        actor_team = team_of.get(actor) if actor is not None else None
+
+        own = actor_team is not None and actor_team == defending
+        rows.append((int(r.frame), "own_goal" if own else "goal", actor,
+                     scoring if not own else scoring))
+        cooldown = r.frame
+    return pd.DataFrame(rows, columns=cols)
+
+
 def detect_saves(shots: pd.DataFrame, spells: pd.DataFrame, fps: float,
                  gk_tracks: set[int], window_s: float | None = None) -> pd.DataFrame:
     """Save = GK gains possession within window after an on-target shot by the opponent."""
